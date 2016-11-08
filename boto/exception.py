@@ -583,3 +583,16 @@ class InvalidInstanceMetadataError(Exception):
     def __init__(self, msg):
         final_msg = msg + '\n' + self.MSG
         super(InvalidInstanceMetadataError, self).__init__(final_msg)
+
+
+class InvalidContainerMetadataError(Exception):
+    MSG = (
+        "You can set the 'metadata_service_num_attempts' "
+        "in your boto config file to increase the number "
+        "of times boto will attempt to retrieve "
+        "credentials from the container metadata service."
+    )
+
+    def __init__(self, msg):
+        final_msg = msg + '\n' + self.MSG
+        super(InvalidContainerMetadataError, self).__init__(final_msg)

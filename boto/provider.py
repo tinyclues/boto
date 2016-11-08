@@ -34,6 +34,7 @@ import boto
 from boto import config
 from boto.compat import expanduser
 from boto.pyami.config import Config
+from boto.exception import InvalidContainerMetadataError
 from boto.exception import InvalidInstanceMetadataError
 from boto.gs.acl import ACL
 from boto.gs.acl import CannedACLStrings as CannedGSACLStrings
@@ -382,16 +383,29 @@ class Provider(object):
         # dependency.
         boto.log.debug("Retrieving credentials from metadata server.")
         from boto.utils import get_instance_metadata
+        from boto.utils import get_container_metadata
         timeout = config.getfloat('Boto', 'metadata_service_timeout', 1.0)
         attempts = config.getint('Boto', 'metadata_service_num_attempts', 1)
         # The num_retries arg is actually the total number of attempts made,
         # so the config options is named *_num_attempts to make this more
         # clear to users.
-        metadata = get_instance_metadata(
-            timeout=timeout, num_retries=attempts,
-            data='meta-data/iam/security-credentials/')
+        ecs_context = False
+        metadata = None
+
+        # Try to get metadata for the ecs container
+        if "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" in os.environ:
+            metadata = get_container_metadata(timeout=timeout, num_retries=attempts)
+
+        # IF the metadata is None fallback to instance metadata
+        if not metadata:
+            metadata = get_instance_metadata(
+                timeout=timeout, num_retries=attempts,
+                data='meta-data/iam/security-credentials/')
+        else:
+            ecs_context = True
+
         if metadata:
-            creds = self._get_credentials_from_metadata(metadata)
+            creds = self._get_credentials_from_metadata(metadata, ecs_context=ecs_context)
             self._access_key = creds[0]
             self._secret_key = creds[1]
             self._security_token = creds[2]
@@ -403,14 +417,23 @@ class Provider(object):
                            self._credential_expiry_time - datetime.now(),
                            expires_at)
 
-    def _get_credentials_from_metadata(self, metadata):
+    def _get_credentials_from_metadata(self, metadata, ecs_context=False):
         # Given metadata, return a tuple of (access, secret, token, expiration)
         # On errors, an InvalidInstanceMetadataError will be raised.
         # The "metadata" is a lazy loaded dictionary means that it's possible
         # to still encounter errors as we traverse through the metadata dict.
         # We try to be careful and raise helpful error messages when this
         # happens.
-        creds = list(metadata.values())[0]
+
+        if ecs_context:
+            creds = metadata
+            exc = InvalidContainerMetadataError
+            ressource = "container"
+        else:
+            creds = list(metadata.values())[0]
+            exc = InvalidInstanceMetadataError
+            ressource = "instance"
+
         if not isinstance(creds, dict):
             # We want to special case a specific error condition which is
             # where get_instance_metadata() returns an empty string on
@@ -419,18 +442,19 @@ class Provider(object):
                 msg = 'an empty string'
             else:
                 msg = 'type: %s' % creds
-            raise InvalidInstanceMetadataError("Expected a dict type of "
-                                               "credentials instead received "
-                                               "%s" % (msg))
+            raise exc("Expected a dict type of "
+                      "credentials instead received "
+                      "%s" % msg)
         try:
             access_key = creds['AccessKeyId']
             secret_key = self._convert_key_to_str(creds['SecretAccessKey'])
             security_token = creds['Token']
             expires_at = creds['Expiration']
         except KeyError as e:
-            raise InvalidInstanceMetadataError(
-                "Credentials from instance metadata missing "
-                "required key: %s" % e)
+            raise exc(
+                "Credentials from %s metadata missing "
+                "required key: %s" % (ressource, e))
+
         return access_key, secret_key, security_token, expires_at
 
     def _convert_key_to_str(self, key):

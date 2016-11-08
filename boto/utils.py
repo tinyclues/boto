@@ -58,6 +58,8 @@ import gzip
 import threading
 import locale
 from boto.compat import six, StringIO, urllib, encodebytes
+from ast import literal_eval
+import os
 
 from contextlib import contextmanager
 
@@ -395,6 +397,25 @@ def get_instance_metadata(version='latest', url='http://169.254.169.254',
     except urllib.error.URLError:
         boto.log.exception("Exception caught when trying to retrieve "
                            "instance metadata for: %s", data)
+        return None
+
+
+def get_container_metadata(url='http://169.254.170.2', timeout=None, num_retries=5):
+
+    """
+    Returns the container metadata as a nested Python dictionary.
+
+    If the timeout is specified, the connection to the specified url
+    will time out after the specified number of seconds.
+
+    """
+    metadata_url = "{}{}".format(url, os.environ["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"])
+
+    try:
+        return dict(literal_eval(retry_url(metadata_url, num_retries=num_retries, timeout=timeout)))
+    except (urllib.error.URLError, SyntaxError):
+        boto.log.exception("Exception caught when trying to retrieve "
+                           "container metadata for: %s", metadata_url)
         return None
 
 
